@@ -14,9 +14,9 @@ from torch import nn, optim
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 # from torch.utils.tensorboard import SummaryWriter
-import torch.multiprocessing as mp
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
+# import torch.multiprocessing as mp
+# import torch.distributed as dist
+# from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.cuda.amp import autocast, GradScaler
 
 import commons
@@ -41,41 +41,31 @@ def main():
     os.environ["MASTER_PORT"] = "40000"
 
     hps = utils.get_hparams()
-    mp.spawn(
-        run,
-        nprocs=n_gpus,
-        args=(
-            n_gpus,
-            hps,
-        ),
-    )
+    run(hps)
 
-
-def run(rank, n_gpus, hps):
+def run(hps):
     global global_step
-    if rank == 0:
-        logger = utils.get_logger(hps.model_dir)
-        logger.info(hps)
-        utils.check_git_hash(hps.model_dir)
-        # writer = SummaryWriter(log_dir=hps.model_dir)
-        # writer_eval = SummaryWriter(log_dir=os.path.join(hps.model_dir, "eval"))
+
+    logger = utils.get_logger(hps.model_dir)
+    logger.info(hps)
+    utils.check_git_hash(hps.model_dir)
+    # writer = SummaryWriter(log_dir=hps.model_dir)
+    # writer_eval = SummaryWriter(log_dir=os.path.join(hps.model_dir, "eval"))
 
     backend_str = (platform.system().lower() == "windows") and "gloo" or "nccl"
-    dist.init_process_group(
-        backend=backend_str, init_method="env://", world_size=n_gpus, rank=rank
-    )
+    print(backend_str)
     torch.manual_seed(hps.train.seed)
-    torch.cuda.set_device(rank)
+    torch.cuda.set_device(0)
 
     train_dataset = TextAudioLoader(hps.data.training_files, hps.data)
-    train_sampler = DistributedBucketSampler(
-        train_dataset,
-        hps.train.batch_size,
-        [32, 300, 400, 500, 600, 700, 800, 900, 1000],
-        num_replicas=n_gpus,
-        rank=rank,
-        shuffle=True,
-    )
+    # train_sampler = DistributedBucketSampler(
+    #     train_dataset,
+    #     hps.train.batch_size,
+    #     [32, 300, 400, 500, 600, 700, 800, 900, 1000],
+    #     num_replicas=n_gpus,
+    #     rank=rank,
+    #     shuffle=True,
+    # )
     # It is possible that dataloader's workers are out of shared memory. Please try to raise your shared memory limit.
     # num_workers=8 -> num_workers=4
     collate_fn = TextAudioCollate()
@@ -85,27 +75,28 @@ def run(rank, n_gpus, hps):
         shuffle=False,
         pin_memory=True,
         collate_fn=collate_fn,
-        batch_sampler=train_sampler,
+        # batch_sampler=[32, 300, 400, 500, 600, 700, 800, 900, 1000],
     )
-    if rank == 0:
-        eval_dataset = TextAudioLoader(hps.data.validation_files, hps.data)
-        eval_loader = DataLoader(
-            eval_dataset,
-            num_workers=4,
-            shuffle=False,
-            batch_size=hps.train.batch_size,
-            pin_memory=True,
-            drop_last=False,
-            collate_fn=collate_fn,
-        )
+    
+    eval_dataset = TextAudioLoader(hps.data.validation_files, hps.data)
+    eval_loader = DataLoader(
+        eval_dataset,
+        num_workers=4,
+        shuffle=False,
+        batch_size=hps.train.batch_size,
+        pin_memory=True,
+        drop_last=False,
+        collate_fn=collate_fn,
+    )
 
     net_g = utils.load_class(hps.train.train_class)(
         len(symbols),
         hps.data.filter_length // 2 + 1,
         hps.train.segment_size // hps.data.hop_length,
         **hps.model,
-    ).cuda(rank)
-    net_d = MultiPeriodDiscriminator(hps.model.use_spectral_norm).cuda(rank)
+    ).cuda()
+    net_d = MultiPeriodDiscriminator(hps.model.use_spectral_norm).cuda()
+
     optim_g = torch.optim.AdamW(
         net_g.parameters(),
         hps.train.learning_rate,
@@ -121,17 +112,11 @@ def run(rank, n_gpus, hps):
 
     try:
         teacher = getattr(hps.train, "teacher")
-        if rank == 0:
-            logger.info(f"Has teacher model: {teacher}")
-
-        net_g = DDP(net_g, device_ids=[rank], find_unused_parameters=True)
+        logger.info(f"Has teacher model: {teacher}")
         utils.load_teacher(teacher, net_g)
     except:
-        net_g = DDP(net_g, device_ids=[rank])
-        if rank == 0:
-            logger.info("no teacher model.")
+        logger.info("no teacher model.")
 
-    net_d = DDP(net_d, device_ids=[rank])
 
     try:
         _, _, _, epoch_str = utils.load_checkpoint(
@@ -155,38 +140,23 @@ def run(rank, n_gpus, hps):
     scaler = GradScaler(enabled=hps.train.fp16_run)
 
     for epoch in range(epoch_str, hps.train.epochs + 1):
-        if rank == 0:
-            train_and_evaluate(
-                rank,
-                epoch,
-                hps,
-                [net_g, net_d],
-                [optim_g, optim_d],
-                [scheduler_g, scheduler_d],
-                scaler,
-                [train_loader, eval_loader],
-                logger,
-                None, #[writer, writer_eval],
-            )
-        else:
-            train_and_evaluate(
-                rank,
-                epoch,
-                hps,
-                [net_g, net_d],
-                [optim_g, optim_d],
-                [scheduler_g, scheduler_d],
-                scaler,
-                [train_loader, None],
-                None,
-                None,
-            )
+        train_and_evaluate(
+            epoch,
+            hps,
+            [net_g, net_d],
+            [optim_g, optim_d],
+            [scheduler_g, scheduler_d],
+            scaler,
+            [train_loader, eval_loader],
+            logger,
+            None, #[writer, writer_eval],
+        )
         scheduler_g.step()
         scheduler_d.step()
 
 
 def train_and_evaluate(
-    rank, epoch, hps, nets, optims, schedulers, scaler, loaders, logger, writers
+    epoch, hps, nets, optims, schedulers, scaler, loaders, logger, writers
 ):
     net_g, net_d = nets
     optim_g, optim_d = optims
@@ -198,26 +168,17 @@ def train_and_evaluate(
         writer = None
         writer_eval = None
 
-    train_loader.batch_sampler.set_epoch(epoch)
+    # train_loader.batch_sampler.set_epoch(epoch)
     global global_step
 
     net_g.train()
     net_d.train()
-    if rank == 0:
-        loader = tqdm.tqdm(train_loader, desc='Loading train data')
-    else:
-        loader = train_loader
+    loader = tqdm.tqdm(train_loader, desc='Loading train data')
     for batch_idx, (x, x_lengths, bert, spec, spec_lengths, y, y_lengths) in enumerate(loader):
-        x, x_lengths = x.cuda(rank, non_blocking=True), x_lengths.cuda(
-            rank, non_blocking=True
-        )
-        spec, spec_lengths = spec.cuda(rank, non_blocking=True), spec_lengths.cuda(
-            rank, non_blocking=True
-        )
-        y, y_lengths = y.cuda(rank, non_blocking=True), y_lengths.cuda(
-            rank, non_blocking=True
-        )
-        bert = bert.cuda(rank, non_blocking=True)
+        x, x_lengths = x.cuda(non_blocking=True), x_lengths.cuda(non_blocking=True)
+        spec, spec_lengths = spec.cuda(non_blocking=True), spec_lengths.cuda(non_blocking=True)
+        y, y_lengths = y.cuda(non_blocking=True), y_lengths.cuda(non_blocking=True)
+        bert = bert.cuda()
 
         with autocast(enabled=hps.train.fp16_run):
             y_hat, l_length, attn, ids_slice, x_mask, z_mask, \
@@ -283,101 +244,99 @@ def train_and_evaluate(
         scaler.step(optim_g)
         scaler.update()
 
-        if rank == 0:
-            if global_step % hps.train.log_interval == 0:
-                lr = optim_g.param_groups[0]["lr"]
-                losses = [
-                    loss_disc,
-                    loss_gen,
-                    loss_fm,
-                    loss_mel,
-                    loss_dur,
-                    loss_kl,
-                    loss_kl_r,
-                ]
-                logger.info(
-                    "Train Epoch: {} [{:.0f}%]".format(
-                        epoch, 100.0 * batch_idx / len(train_loader)
-                    )
+        if global_step % hps.train.log_interval == 0:
+            lr = optim_g.param_groups[0]["lr"]
+            losses = [
+                loss_disc,
+                loss_gen,
+                loss_fm,
+                loss_mel,
+                loss_dur,
+                loss_kl,
+                loss_kl_r,
+            ]
+            logger.info(
+                "Train Epoch: {} [{:.0f}%]".format(
+                    epoch, 100.0 * batch_idx / len(train_loader)
                 )
-                logger.info([global_step, lr])
-                logger.info(
-                    f"loss_disc={loss_disc:.3f}, loss_gen={loss_gen:.3f}, loss_fm={loss_fm:.3f}"
-                )
-                logger.info(
-                    f"loss_mel={loss_mel:.3f}, loss_dur={loss_dur:.3f}, loss_kl={loss_kl:.3f}"
-                )
-                logger.info(
-                    f"loss_kl_r={loss_kl_r:.3f}"
-                )
+            )
+            logger.info([global_step, lr])
+            logger.info(
+                f"loss_disc={loss_disc:.3f}, loss_gen={loss_gen:.3f}, loss_fm={loss_fm:.3f}"
+            )
+            logger.info(
+                f"loss_mel={loss_mel:.3f}, loss_dur={loss_dur:.3f}, loss_kl={loss_kl:.3f}"
+            )
+            logger.info(
+                f"loss_kl_r={loss_kl_r:.3f}"
+            )
 
-                scalar_dict = {
-                    "loss/g/total": loss_gen_all,
-                    "loss/d/total": loss_disc_all,
-                    "learning_rate": lr,
-                    "grad_norm_d": grad_norm_d,
-                    "grad_norm_g": grad_norm_g,
+            scalar_dict = {
+                "loss/g/total": loss_gen_all,
+                "loss/d/total": loss_disc_all,
+                "learning_rate": lr,
+                "grad_norm_d": grad_norm_d,
+                "grad_norm_g": grad_norm_g,
+            }
+            scalar_dict.update(
+                {
+                    "loss/g/fm": loss_fm,
+                    "loss/g/mel": loss_mel,
+                    "loss/g/dur": loss_dur,
+                    "loss/g/kl": loss_kl,
+                    "loss/g/kl_r": loss_kl_r,
                 }
-                scalar_dict.update(
-                    {
-                        "loss/g/fm": loss_fm,
-                        "loss/g/mel": loss_mel,
-                        "loss/g/dur": loss_dur,
-                        "loss/g/kl": loss_kl,
-                        "loss/g/kl_r": loss_kl_r,
-                    }
-                )
+            )
 
-                scalar_dict.update(
-                    {"loss/g/{}".format(i): v for i, v in enumerate(losses_gen)}
-                )
-                scalar_dict.update(
-                    {"loss/d_r/{}".format(i): v for i, v in enumerate(losses_disc_r)}
-                )
-                scalar_dict.update(
-                    {"loss/d_g/{}".format(i): v for i, v in enumerate(losses_disc_g)}
-                )
-                image_dict = {
-                    "slice/mel_org": utils.plot_spectrogram_to_numpy(
-                        y_mel[0].data.cpu().numpy()
-                    ),
-                    "slice/mel_gen": utils.plot_spectrogram_to_numpy(
-                        y_hat_mel[0].data.cpu().numpy()
-                    ),
-                    "all/mel": utils.plot_spectrogram_to_numpy(
-                        mel[0].data.cpu().numpy()
-                    ),
-                    "all/attn": utils.plot_alignment_to_numpy(
-                        attn[0, 0].data.cpu().numpy()
-                    ),
-                }
-                # utils.summarize(
-                #     writer=writer,
-                #     global_step=global_step,
-                #     images=image_dict,
-                #     scalars=scalar_dict,
-                # )
+            scalar_dict.update(
+                {"loss/g/{}".format(i): v for i, v in enumerate(losses_gen)}
+            )
+            scalar_dict.update(
+                {"loss/d_r/{}".format(i): v for i, v in enumerate(losses_disc_r)}
+            )
+            scalar_dict.update(
+                {"loss/d_g/{}".format(i): v for i, v in enumerate(losses_disc_g)}
+            )
+            image_dict = {
+                "slice/mel_org": utils.plot_spectrogram_to_numpy(
+                    y_mel[0].data.cpu().numpy()
+                ),
+                "slice/mel_gen": utils.plot_spectrogram_to_numpy(
+                    y_hat_mel[0].data.cpu().numpy()
+                ),
+                "all/mel": utils.plot_spectrogram_to_numpy(
+                    mel[0].data.cpu().numpy()
+                ),
+                "all/attn": utils.plot_alignment_to_numpy(
+                    attn[0, 0].data.cpu().numpy()
+                ),
+            }
+            # utils.summarize(
+            #     writer=writer,
+            #     global_step=global_step,
+            #     images=image_dict,
+            #     scalars=scalar_dict,
+            # )
 
-            if global_step % hps.train.eval_interval == 0:
-                evaluate(hps, net_g, eval_loader, writer_eval)
-                utils.save_checkpoint(
-                    net_g,
-                    optim_g,
-                    hps.train.learning_rate,
-                    epoch,
-                    os.path.join(hps.model_dir, "G_{}.pth".format(global_step)),
-                )
-                utils.save_checkpoint(
-                    net_d,
-                    optim_d,
-                    hps.train.learning_rate,
-                    epoch,
-                    os.path.join(hps.model_dir, "D_{}.pth".format(global_step)),
-                )
-        global_step += 1
+        if global_step % hps.train.eval_interval == 0:
+            evaluate(hps, net_g, eval_loader, writer_eval)
+            utils.save_checkpoint(
+                net_g,
+                optim_g,
+                hps.train.learning_rate,
+                epoch,
+                os.path.join(hps.model_dir, "G_{}.pth".format(global_step)),
+            )
+            utils.save_checkpoint(
+                net_d,
+                optim_d,
+                hps.train.learning_rate,
+                epoch,
+                os.path.join(hps.model_dir, "D_{}.pth".format(global_step)),
+            )
+    global_step += 1
 
-    if rank == 0:
-        logger.info("====> Epoch: {}".format(epoch))
+    logger.info("====> Epoch: {}".format(epoch))
 
 
 def evaluate(hps, generator, eval_loader, writer_eval):

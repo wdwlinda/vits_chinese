@@ -21,7 +21,8 @@ def process_file(file, wavPath, outPath, sr):
 
 
 def process_files_with_thread_pool(wavPath, outPath, sr, thread_num=None):
-    files = [f for f in os.listdir(f"./{wavPath}") if f.endswith(".wav")]
+    # files = [f for f in os.listdir(f"./{wavPath}") if f.endswith(".wav")]
+    files = [f for f in os.listdir(f"{wavPath}") if f.endswith(".wav")]
 
     with ThreadPoolExecutor(max_workers=thread_num) as executor:
         futures = {executor.submit(process_file, file, wavPath, outPath, sr): file for file in files}
@@ -35,7 +36,7 @@ if __name__ == "__main__":
     parser.add_argument("-w", "--wav", help="wav", dest="wav", required=True)
     parser.add_argument("-o", "--out", help="out", dest="out", required=True)
     parser.add_argument("-s", "--sr", help="sample rate", dest="sr", type=int, required=True)
-    parser.add_argument("-t", "--thread_count", help="thread count to process, set 0 to use all cpu cores", dest="thread_count", type=int, default=1)
+    parser.add_argument("-t", "--thread_count", help="thread count to process, set 0 to use all cpu cores", dest="thread_count", type=int, default=0)
 
     args = parser.parse_args()
     print(args.wav)
