@@ -1,0 +1,15 @@
+
+#tmp_files
+*.wav
+*.npy
+*.pt
+*.pyc
+
+*.c
+*.o
+*.so
+*.txt
+*.log
+
+logs/**
+logs_copy/**

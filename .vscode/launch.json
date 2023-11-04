@@ -5,7 +5,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "debug",
+            "name": "train debug",
             "type": "python",
             "request": "launch",
             "program": "${file}",
@@ -15,10 +15,23 @@
             //     "CUDA_VISIBLE_DEVICES":"4"  // 设置cuda
             // },
             "args": [
-                "-c",
-                "configs/bert_vits.json",
-                "-m",
-                "bert_vits"
+                "-c", "configs/bert_vits.json",
+                "-m", "bert_vits"
+            ]
+        },
+        {
+            "name": "infer debug",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            // "env": {
+            //     "CUDA_VISIBLE_DEVICES":"4"  // 设置cuda
+            // },
+            "args": [
+                "--config", "configs/bert_vits.json",
+                "--model",  "logs_copy/bert_vits/G_150000.pth"
             ]
         }
     ]

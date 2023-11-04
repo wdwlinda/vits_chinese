@@ -72,10 +72,10 @@ def run(hps):
     train_loader = DataLoader(
         train_dataset,
         num_workers=4,
-        shuffle=False,
-        pin_memory=True,
+        shuffle=True,
+        batch_size=hps.train.batch_size,
+        pin_memory=False,
         collate_fn=collate_fn,
-        # batch_sampler=[32, 300, 400, 500, 600, 700, 800, 900, 1000],
     )
     
     eval_dataset = TextAudioLoader(hps.data.validation_files, hps.data)
@@ -84,7 +84,7 @@ def run(hps):
         num_workers=4,
         shuffle=False,
         batch_size=hps.train.batch_size,
-        pin_memory=True,
+        pin_memory=False,
         drop_last=False,
         collate_fn=collate_fn,
     )
@@ -334,7 +334,7 @@ def train_and_evaluate(
                 epoch,
                 os.path.join(hps.model_dir, "D_{}.pth".format(global_step)),
             )
-    global_step += 1
+        global_step += 1
 
     logger.info("====> Epoch: {}".format(epoch))
 
@@ -356,7 +356,8 @@ def evaluate(hps, generator, eval_loader, writer_eval):
             y = y[:1]
             y_lengths = y_lengths[:1]
             break
-        y_hat, attn, mask, *_ = generator.module.infer(x, x_lengths, bert, max_len=1000)
+        # y_hat, attn, mask, *_ = generator.module.infer(x, x_lengths, bert, max_len=1000)
+        y_hat, attn, mask, *_ = generator.infer(x, x_lengths, bert, max_len=1000)
         y_hat_lengths = mask.sum([1, 2]).long() * hps.data.hop_length
 
         mel = spec_to_mel_torch(
