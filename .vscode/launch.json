@@ -14,9 +14,13 @@
             // "env": {
             //     "CUDA_VISIBLE_DEVICES":"4"  // 设置cuda
             // },
+            // "args": [
+            //     "-c", "configs/bert_vits.json",
+            //     "-m", "bert_vits"
+            // ],
             "args": [
-                "-c", "configs/bert_vits.json",
-                "-m", "bert_vits"
+                "-c", "configs/bert_vits_cpy.json",
+                "-m", "bert_vits_single_gpu"
             ]
         },
         {
@@ -31,7 +35,8 @@
             // },
             "args": [
                 "--config", "configs/bert_vits.json",
-                "--model",  "logs_copy/bert_vits/G_150000.pth"
+                // "--model",  "logs_copy/bert_vits/G_10000.pth"
+                "--model",  "logs/bert_vits_single_gpu/G_20000.pth"
             ]
         }
     ]

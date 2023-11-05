@@ -28,6 +28,13 @@ from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
 from text.symbols import symbols
 import platform
 
+
+import datetime
+import wandb
+wandb.login(key='4ec0396ddf4a239b6fcb4daa9e15710b5cf963cd')
+# wandb = None
+
+
 torch.backends.cudnn.benchmark = True
 global_step = 0
 
@@ -40,8 +47,16 @@ def main():
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "40000"
 
+    wandb.init(
+            # set the wandb project where this run will be logged
+            project="vits",
+            config = utils.get_hparams(),
+            name = 'orginal' + datetime.datetime.now().strftime('%F %T')
+        )
+
     hps = utils.get_hparams()
     run(hps)
+    wandb.finish()
 
 def run(hps):
     global global_step
@@ -142,6 +157,7 @@ def run(hps):
     for epoch in range(epoch_str, hps.train.epochs + 1):
         train_and_evaluate(
             epoch,
+            hps.train.epochs,
             hps,
             [net_g, net_d],
             [optim_g, optim_d],
@@ -156,7 +172,7 @@ def run(hps):
 
 
 def train_and_evaluate(
-    epoch, hps, nets, optims, schedulers, scaler, loaders, logger, writers
+    epoch, epochs, hps, nets, optims, schedulers, scaler, loaders, logger, writers
 ):
     net_g, net_d = nets
     optim_g, optim_d = optims
@@ -244,8 +260,21 @@ def train_and_evaluate(
         scaler.step(optim_g)
         scaler.update()
 
+        wandb.log( {
+            "loss_disc":loss_disc, 
+            "loss_fm":loss_fm, 
+            "loss_mel":loss_mel, 
+            "loss_dur":loss_dur, 
+            "loss_kl":loss_kl, 
+            "loss_kl_r":loss_kl_r,
+            "loss_gen_all":loss_gen_all
+            } )
+
+        # log info
         if global_step % hps.train.log_interval == 0:
             lr = optim_g.param_groups[0]["lr"]
+            wandb.log({"lr":lr})
+
             losses = [
                 loss_disc,
                 loss_gen,
@@ -256,8 +285,8 @@ def train_and_evaluate(
                 loss_kl_r,
             ]
             logger.info(
-                "Train Epoch: {} [{:.0f}%]".format(
-                    epoch, 100.0 * batch_idx / len(train_loader)
+                "Train Epoch: {}/{} [{:.0f}%]".format(
+                    epoch, epochs, 100.0 * batch_idx / len(train_loader)
                 )
             )
             logger.info([global_step, lr])

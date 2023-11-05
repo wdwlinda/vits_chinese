@@ -3,6 +3,7 @@
 *.wav
 *.npy
 *.pt
+*.pth
 *.pyc
 
 *.c
@@ -13,3 +14,5 @@
 
 logs/**
 logs_copy/**
+vits_infer_out/**
+wandb/**
